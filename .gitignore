@@ -1,0 +1,5 @@
+base/
+venv/
+download/
+*.json
+*.csv
