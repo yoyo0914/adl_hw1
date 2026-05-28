@@ -1,6 +1,3 @@
-"""
-Question answering utility functions
-"""
 import collections
 import json
 import logging
@@ -26,36 +23,7 @@ def postprocess_qa_predictions(
     prefix: Optional[str] = None,
     log_level: Optional[int] = logging.WARNING,
 ):
-    """
-    Post-processes the predictions of a question-answering model to convert them to answers that are substrings of the
-    original contexts. This is the base postprocessing functions for models that only return start and end logits.
 
-    Args:
-        examples: The non-preprocessed dataset (see the main script for more information).
-        features: The processed dataset (see the main script for more information).
-        predictions (:obj:`Tuple[np.ndarray, np.ndarray]`):
-            The predictions of the model: two arrays containing the start logits and the end logits respectively. Its
-            first dimension must match the number of elements of :obj:`features`.
-        version_2_with_negative (:obj:`bool`, `optional`, defaults to :obj:`False`):
-            Whether or not the underlying dataset contains examples with no answers.
-        n_best_size (:obj:`int`, `optional`, defaults to 20):
-            The total number of n-best predictions to generate when looking for an answer.
-        max_answer_length (:obj:`int`, `optional`, defaults to 30):
-            The maximum length of an answer that can be generated. This is needed because the start and end predictions
-            are not conditioned on one another.
-        null_score_diff_threshold (:obj:`float`, `optional`, defaults to 0):
-            The threshold used to select the null answer: if the best answer has a score that is less than the score of
-            the null answer minus this threshold, the null answer is selected for this example (note that the null answer
-            has a score of 0.0). Only useful when :obj:`version_2_with_negative` is :obj:`True`.
-        output_dir (:obj:`str`, `optional`):
-            If provided, the dictionaries of predictions, n_best predictions (with their scores and logits) and, if
-            :obj:`version_2_with_negative=True`, the dictionary of the scores differences between best and null answers,
-            are saved in `output_dir`.
-        prefix (:obj:`str`, `optional`):
-            If provided, the dictionaries mentioned above are saved with `prefix` added to their names.
-        log_level (:obj:`int`, `optional`, defaults to ``logging.WARNING``):
-            ``logging`` level to use for generating logs on this function.
-    """
     if len(predictions) != 2:
         raise ValueError("`predictions` should be a tuple with two elements (start_logits, end_logits).")
     all_start_logits, all_end_logits = predictions
@@ -63,31 +31,25 @@ def postprocess_qa_predictions(
     if len(predictions[0]) != len(features):
         raise ValueError(f"Got {len(predictions[0])} predictions and {len(features)} features.")
 
-    # Build a map example to its corresponding features.
     example_id_to_index = {k: i for i, k in enumerate(examples["id"])}
     features_per_example = collections.defaultdict(list)
     for i, feature in enumerate(features):
         features_per_example[example_id_to_index[feature["example_id"]]].append(i)
 
-    # The dictionaries we have to fill.
     all_predictions = collections.OrderedDict()
     all_nbest_json = collections.OrderedDict()
     if version_2_with_negative:
         scores_diff_json = collections.OrderedDict()
 
-    # Logging.
     logger.setLevel(log_level)
     logger.info(f"Post-processing {len(examples)} example predictions split into {len(features)} features.")
 
-    # Let's loop over all the examples!
     for example_index, example in enumerate(examples):
-        # Those are the indices of the features associated to the current example.
         feature_indices = features_per_example[example_index]
 
         min_null_prediction = None
         prelim_predictions = []
 
-        # Looping through all the features associated to the current example.
         for feature_index in feature_indices:
             # We grab the predictions of the model for this feature.
             start_logits = all_start_logits[feature_index]
@@ -169,8 +131,6 @@ def postprocess_qa_predictions(
                 0, {"text": "empty", "start_logit": 0.0, "end_logit": 0.0, "score": 0.0, "offsets": (0, 0)}
             )
 
-        # Compute the softmax of all scores (we do it with numpy to stay independent from torch/tf in this file, using
-        # the LogSumExp trick).
         scores = np.array([pred.pop("score") for pred in predictions])
         exp_scores = np.exp(scores - np.max(scores))
         probs = exp_scores / exp_scores.sum()

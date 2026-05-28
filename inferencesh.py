@@ -1,3 +1,4 @@
+import argparse
 import json
 import torch
 import pandas as pd
@@ -5,34 +6,48 @@ import re
 from transformers import AutoTokenizer, AutoModelForMultipleChoice, AutoModelForQuestionAnswering
 from tqdm import tqdm
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Two-stage Chinese QA Inference")
+    parser.add_argument('--context_file', type=str, required=True, help='Path to context.json')
+    parser.add_argument('--test_file', type=str, required=True, help='Path to test.json')
+    parser.add_argument('--output_file', type=str, required=True, help='Path to output prediction.csv')
+    parser.add_argument('--paragraph_model_path', type=str, default='./paragraph_selection_model_full', 
+                       help='Path to paragraph selection model')
+    parser.add_argument('--qa_model_path', type=str, default='./qa_model_full', 
+                       help='Path to QA model')
+    parser.add_argument('--max_length', type=int, default=512, help='Maximum sequence length')
+    parser.add_argument('--max_answer_length', type=int, default=60, help='Maximum answer length')
+    parser.add_argument('--debug', action='store_true', help='Enable debug mode with detailed output')
+    return parser.parse_args()
+
 def clean_answer(text):
     """清理答案文本"""
     if not text:
         return ""
     return text.strip()
 
-def load_models():
+def load_models(para_model_path, qa_model_path):
     """載入兩階段模型"""
     print("載入段落選擇模型...")
-    paragraph_tokenizer = AutoTokenizer.from_pretrained('./paragraph_selection_model_922')
-    paragraph_model = AutoModelForMultipleChoice.from_pretrained('./paragraph_selection_model_922')
+    paragraph_tokenizer = AutoTokenizer.from_pretrained(para_model_path)
+    paragraph_model = AutoModelForMultipleChoice.from_pretrained(para_model_path)
     paragraph_model.eval()
     
     print("載入答案抽取模型...")
-    qa_tokenizer = AutoTokenizer.from_pretrained('./answer_extraction_model_final_923')
-    qa_model = AutoModelForQuestionAnswering.from_pretrained('./answer_extraction_model_final_923')
+    qa_tokenizer = AutoTokenizer.from_pretrained(qa_model_path)
+    qa_model = AutoModelForQuestionAnswering.from_pretrained(qa_model_path)
     qa_model.eval()
     
     return paragraph_tokenizer, paragraph_model, qa_tokenizer, qa_model
 
-def load_data():
+def load_data(context_file, test_file):
     """載入測試數據和段落內容"""
     print("載入測試數據...")
-    with open('test.json', 'r', encoding='utf-8') as f:
+    with open(test_file, 'r', encoding='utf-8') as f:
         test_data = json.load(f)
     
     print("載入段落內容...")
-    with open('context.json', 'r', encoding='utf-8') as f:
+    with open(context_file, 'r', encoding='utf-8') as f:
         context_data = json.load(f)
     
     # 處理context格式
@@ -43,8 +58,8 @@ def load_data():
     
     return test_data, contexts
 
-def select_paragraph(item, contexts, tokenizer, model):
-    """階段1: 段落選擇 - 增加debug輸出"""
+def select_paragraph(item, contexts, tokenizer, model, max_length=512):
+    """階段1: 段落選擇"""
     question = item['question']
     paragraph_texts = []
     
@@ -63,11 +78,11 @@ def select_paragraph(item, contexts, tokenizer, model):
     first_sentences = [question] * 4
     second_sentences = paragraph_texts
     
-    # Tokenize - 調整max_length與訓練一致
+    # Tokenize
     inputs = tokenizer(
         first_sentences,
         second_sentences,
-        max_length=512,  # 改回與訓練一致的長度
+        max_length=max_length,
         padding=True,
         truncation=True,
         return_tensors="pt"
@@ -89,16 +104,16 @@ def select_paragraph(item, contexts, tokenizer, model):
     
     return selected_paragraph_id, selected_context, predicted_idx, logits.tolist()
 
-def extract_answer(question, context, tokenizer, model, max_answer_length=60):  # 增加max_answer_length
-    """階段2: 答案抽取 - 改善版本"""
+def extract_answer(question, context, tokenizer, model, max_length=512, max_answer_length=60):
+    """階段2: 答案抽取"""
     if not context.strip():
         return "", 0.0
     
-    # Tokenize - 確保與訓練一致
+    # Tokenize
     inputs = tokenizer(
         question,
         context,
-        max_length=512,
+        max_length=max_length,
         padding=True,
         truncation=True,
         return_tensors="pt",
@@ -114,12 +129,12 @@ def extract_answer(question, context, tokenizer, model, max_answer_length=60):  
         start_logits = outputs.start_logits[0]
         end_logits = outputs.end_logits[0]
     
-    # 智能span選擇 - 增加候選數量
+    # 智能span選擇
     best_score = -float('inf')
     best_start, best_end = 0, 0
     
     # 增加候選數量
-    top_k = min(5, len(start_logits))  
+    top_k = min(30, len(start_logits))  
     start_candidates = torch.topk(start_logits, top_k).indices.tolist()
     end_candidates = torch.topk(end_logits, top_k).indices.tolist()
     
@@ -159,13 +174,14 @@ def extract_answer(question, context, tokenizer, model, max_answer_length=60):  
     else:
         answer = ""
     
-    return clean_answer(answer), best_score
+    return clean_answer(answer), float(best_score)
 
-def run_inference():
-    """執行完整推理 - 增加詳細debug"""
+def run_inference(args):
+    """執行完整推理"""
     # 載入模型和數據
-    para_tokenizer, para_model, qa_tokenizer, qa_model = load_models()
-    test_data, contexts = load_data()
+    para_tokenizer, para_model, qa_tokenizer, qa_model = load_models(
+        args.paragraph_model_path, args.qa_model_path)
+    test_data, contexts = load_data(args.context_file, args.test_file)
     
     print(f"開始處理 {len(test_data)} 個測試樣本...")
     
@@ -177,16 +193,17 @@ def run_inference():
         try:
             # 階段1: 選擇段落
             selected_id, selected_context, selected_idx, para_logits = select_paragraph(
-                item, contexts, para_tokenizer, para_model
+                item, contexts, para_tokenizer, para_model, args.max_length
             )
             
             # 記錄段落選擇的信心度
-            para_confidence = max(para_logits) - min(para_logits)  # 最高分與最低分的差距
+            para_confidence = max(para_logits) - min(para_logits)
             paragraph_selection_stats.append(para_confidence)
             
             # 階段2: 抽取答案
             answer, qa_confidence = extract_answer(
-                item['question'], selected_context, qa_tokenizer, qa_model
+                item['question'], selected_context, qa_tokenizer, qa_model,
+                args.max_length, args.max_answer_length
             )
             
             qa_confidence_stats.append(qa_confidence)
@@ -196,8 +213,8 @@ def run_inference():
                 'answer': answer
             })
             
-            # 詳細debug前10個案例
-            if i < 10:
+            # Debug輸出前10個案例
+            if args.debug and i < 10:
                 print(f"\n=== 案例 {i+1} 詳細分析 ===")
                 print(f"問題: {item['question']}")
                 print(f"4個段落選項的得分: {[f'{score:.3f}' for score in para_logits]}")
@@ -217,15 +234,16 @@ def run_inference():
             })
     
     # 統計分析
-    print(f"\n=== 性能分析 ===")
-    print(f"段落選擇平均信心度: {sum(paragraph_selection_stats)/len(paragraph_selection_stats):.3f}")
-    print(f"QA平均信心度: {sum(qa_confidence_stats)/len(qa_confidence_stats):.3f}")
-    print(f"低信心度段落選擇 (<1.0): {sum(1 for x in paragraph_selection_stats if x < 1.0)}")
-    print(f"低信心度QA (<0): {sum(1 for x in qa_confidence_stats if x < 0)}")
+    if paragraph_selection_stats and qa_confidence_stats:
+        print(f"\n=== 性能分析 ===")
+        print(f"段落選擇平均信心度: {sum(paragraph_selection_stats)/len(paragraph_selection_stats):.3f}")
+        print(f"QA平均信心度: {sum(qa_confidence_stats)/len(qa_confidence_stats):.3f}")
+        print(f"低信心度段落選擇 (<1.0): {sum(1 for x in paragraph_selection_stats if x < 1.0)}")
+        print(f"低信心度QA (<0): {sum(1 for x in qa_confidence_stats if x < 0)}")
     
     return results
 
-def save_submission(results, filename='submission.csv'):
+def save_submission(results, filename):
     """保存提交檔案"""
     df = pd.DataFrame(results)
     df.to_csv(filename, index=False)
@@ -244,9 +262,22 @@ def save_submission(results, filename='submission.csv'):
         print(f"最長答案: {max(answer_lengths)}")
 
 def main():
-    results = run_inference()
-    save_submission(results)
-    print("完成！")
+    args = parse_args()
+    
+    print("=== 中文抽取式問答系統 - 兩階段推理 ===")
+    print(f"Context文件: {args.context_file}")
+    print(f"測試文件: {args.test_file}")
+    print(f"輸出文件: {args.output_file}")
+    print(f"段落選擇模型: {args.paragraph_model_path}")
+    print(f"QA模型: {args.qa_model_path}")
+    print(f"最大序列長度: {args.max_length}")
+    print(f"最大答案長度: {args.max_answer_length}")
+    print(f"Debug模式: {args.debug}")
+    print("=" * 50)
+    
+    results = run_inference(args)
+    save_submission(results, args.output_file)
+    print("推理完成！")
 
 if __name__ == "__main__":
     main()

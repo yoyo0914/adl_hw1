@@ -3,3 +3,5 @@ venv/
 download/
 *.json
 *.csv
+paragraph_selection_model_full/
+qa_model_full/

@@ -4,14 +4,15 @@ conda activate swag_env
 ssh peter900218@100.110.140.73
 peter900218
 scp ~/projects/adl/*.py ~/projects/adl/*.sh peter900218@100.110.140.73:~/yoyo/adl/
-scp peter900218@100.110.140.73:/tmp1/peter900218/adl/submission_full.csv ~/projects/adl/
-scp ~/projects/adl/inference.py peter900218@100.110.140.73:/tmp1/peter900218/adl/
+scp -r peter900218@100.110.140.73:/tmp1/peter900218/adl/qa_model_full ~/projects/adl
+peter900218@100.110.140.73:/tmp1/peter900218/adl/paragraph_selection_model_full ~/projects/adl/
+
 
 scp peter900218@100.110.140.73:~/yoyo/adl/paragraph_selection_model_best \
        yoyo/adl/answer_extraction_model_best \
        ~/projects/adl/
 
-scp -r peter900218@100.110.140.73:/tmp1/peter900218/adl ~/projects/adl/download
+scp peter900218@100.110.140.73:/tmp1/peter900218/adlsubmission_segment_wise.csv ~/projects/adl/
 tensorboard --logdir ./paragraph_selection_model_report --port 6006 --host 0.0.0.0
 http://100.110.140.73:6006
 
